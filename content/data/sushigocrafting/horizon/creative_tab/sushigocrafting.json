@@ -1,0 +1,18 @@
+{
+  "icon": "sushigocrafting:cutting_board",
+  "items": [
+    "sushigocrafting:cutting_board",
+    "sushigocrafting:cucumber",
+    "sushigocrafting:avocado",
+    "sushigocrafting:wasabi_root",
+    "sushigocrafting:raw_tuna",
+    "sushigocrafting:cleaver_knife",
+    "sushigocrafting:avocado_slices",
+    "sushigocrafting:cucumber_slices",
+    "sushigocrafting:imitation_crab",
+    "sushigocrafting:salmon_fillet",
+    "sushigocrafting:tuna_fillet",
+    "sushigocrafting:wasabi_paste"
+  ],
+  "title": "itemGroup.sushigocrafting"
+}

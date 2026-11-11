@@ -1,0 +1,18 @@
+[package]
+# Ported from: Sushi Go Crafting 1.21-0.6.7 (Buuz135/SushiGoCrafting, MIT),
+# Minecraft Java 1.21.1 NeoForge. Clean-room Rust rewrite; local-only until the
+# maintainer approves publishing (ARCHITECTURE.md §8).
+name = "horizon-sushigocrafting"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+description = "Sushi Go Crafting for Horizon: the cutting board (slice 1)"
+
+[lib]
+# This exact source is also injected as a same-crate module by horizon-mixins.
+path = "mixins/sushigocrafting/runtime.rs"
+
+[workspace]
+members = ["tools/audit"]
+resolver = "2"

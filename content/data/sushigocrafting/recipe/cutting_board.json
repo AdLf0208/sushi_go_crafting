@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "key": {
+    "B": "#minecraft:logs",
+    "S": "#minecraft:slabs"
+  },
+  "pattern": [
+    "   ",
+    "SSS",
+    "BBB"
+  ],
+  "result": {
+    "count": 1,
+    "id": "sushigocrafting:cutting_board"
+  }
+}

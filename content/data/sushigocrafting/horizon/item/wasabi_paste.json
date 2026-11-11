@@ -1,0 +1,26 @@
+{
+  "template": "minecraft:apple",
+  "max_stack_size": 1,
+  "components": {
+    "minecraft:food": {
+      "nutrition": 2,
+      "saturation": 1.2
+    },
+    "minecraft:consumable": {
+      "on_consume_effects": [
+        {
+          "type": "minecraft:apply_effects",
+          "effects": [
+            {
+              "id": "minecraft:poison",
+              "duration": 100,
+              "amplifier": 0,
+              "show_icon": true
+            }
+          ],
+          "probability": 0.6
+        }
+      ]
+    }
+  }
+}

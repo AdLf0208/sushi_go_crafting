@@ -1,0 +1,10 @@
+# Port-owned content mod for the Sushi Go Crafting cut (slice 1): the cutting
+# board, the eleven items its loop needs, and the jar's own tags/recipe/loot.
+# The blockstate, models and textures are the upstream mod's own MIT assets,
+# read from the exact ATM10 jar (see ../CONTENT.md).
+id = "sushigocrafting"
+name = "Sushi Go Crafting"
+version = "0.1.0"
+api = "0.2"
+side = "both"
+capabilities = ["registries"]
