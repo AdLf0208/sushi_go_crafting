@@ -1,0 +1,15 @@
+{
+  "block.sushigocrafting.cutting_board": "Cutting Board",
+  "itemGroup.sushigocrafting": "Sushi Go Crafting",
+  "item.sushigocrafting.cucumber": "Cucumber",
+  "item.sushigocrafting.avocado": "Avocado",
+  "item.sushigocrafting.wasabi_root": "Wasabi Root",
+  "item.sushigocrafting.raw_tuna": "Raw Tuna",
+  "item.sushigocrafting.cleaver_knife": "Cleaver Knife",
+  "item.sushigocrafting.avocado_slices": "Avocado Slices",
+  "item.sushigocrafting.cucumber_slices": "Cucumber Slices",
+  "item.sushigocrafting.imitation_crab": "Imitation Crab",
+  "item.sushigocrafting.salmon_fillet": "Salmon Fillet",
+  "item.sushigocrafting.tuna_fillet": "Tuna Fillet",
+  "item.sushigocrafting.wasabi_paste": "Wasabi Paste"
+}

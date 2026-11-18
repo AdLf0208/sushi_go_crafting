@@ -1,0 +1,35 @@
+# Sushi Go Crafting for Horizon — slice 1: the cutting board, one flat SDK package.
+#
+# Migrated 2026-11-18 from the retired `.hnmod` container (Horizon's mod-API merge
+# #16941, launcher >= 0.2.70; the registry closed submission #818 with the format
+# purge). The manifest below is the only one: identity, the content capability and
+# the exact native pins. `assets/` and `data/` are the carried content (the board,
+# its eleven items, tags, recipe, loot table and creative tab), `src/` is the
+# port's code; both halves travel in one file, which is the point of the SDK layout.
+#
+# Licence: MIT, read from the jar's `META-INF/neoforge.mods.toml` (rank 0,
+# permissive). `LICENSE` and `LICENSE-NOTICE.md` travel inside the package.
+# Local-only until the maintainer approves publishing (ARCHITECTURE.md §8).
+id = "sushigocrafting"
+name = "Sushi Go Crafting"
+version = "0.2.0"
+description = """A port of Sushi Go Crafting for Horizon: the cutting board — one item slot that takes
+only a cutting-board ingredient, a knife that strokes it, six strokes per cut, and the jar's six
+recipes giving their AmountItem with the jar's own amount range as the sushigocrafting:amount
+component. The board turns toward its placer (subfacing). The rice cooker, the fermentation barrel,
+the roller, the cooler box, every crop and the avocado tree, the two fish, the sushi foods, the
+three mob effects, worldgen and the client renderer are not ported yet."""
+authors = ["Buuz135", "AdLf0208"]
+# The content API: exact and checked. This package ships carried content beside its
+# code, so the capability is a real claim; it is also the one value the manifest
+# schema has.
+api = "0.2"
+# The installation side, not the hook's: an integrated server belongs to the client
+# installation, so a LAN host or a single-player world needs both.
+side = "both"
+capabilities = ["registries"]
+
+[native]
+game = "26.3"
+horizon = "0b14f8acfd97fa2c750e42795249dcc981178ca4"
+mixins = "e59da9094f0c2fdda6c627fe9eff22dec6a906f0"

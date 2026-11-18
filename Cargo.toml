@@ -1,0 +1,24 @@
+[package]
+# Port of Sushi Go Crafting 1.21-0.6.7 (Buuz135/SushiGoCrafting, MIT, branch 1.21 at
+# c3b296bf81b4f2a712ea1a3c58cbef0f86746f55). Minecraft Java 1.21.1 NeoForge; the
+# port targets Horizon 26.3 at the pin in horizon-mod.toml. Clean-room Rust rewrite
+# from the mod's behaviour (FINDINGS.md); local-only until the maintainer approves
+# publishing, publishable under MIT with this source.
+#
+# Cargo's name and version are not the mod's identity: horizon-mod.toml is.
+name = "sushigocrafting"
+version = "0.2.0"
+edition = "2024"
+license = "MIT"
+description = "Sushi Go Crafting for Horizon: the cutting board"
+publish = false
+
+[lib]
+# The pure rules are `src/runtime.rs`; the crate root is `src/lib.rs`.
+path = "src/lib.rs"
+
+[dependencies]
+# The pinned SDK's API crate, fetched into .horizon/sdk/ by any `cargo horizon-mod`
+# command (the launcher builds against its own copy of the same build). This port
+# adds no registry dependency of its own.
+horizon-mod-api = { path = ".horizon/sdk/api/crates/horizon-mod-api" }
