@@ -1,17 +1,19 @@
-# Sushi Go Crafting for Horizon — slice 1: the cutting board
+# Sushi Go Crafting — a Horizon port
 
-A clean-room Rust port of **Sushi Go Crafting 1.21-0.6.7**
-([Buuz135/SushiGoCrafting](https://github.com/Buuz135/SushiGoCrafting), **MIT**)
-for [Horizon](https://github.com/horizon-rust/horizon): Minecraft Java 26.3, one
-flat SDK package (mod API **0.2**) built against nightly
-`0b14f8acfd97fa2c750e42795249dcc981178ca4` / mixins
-`e59da9094f0c2fdda6c627fe9eff22dec6a906f0`.
+**Sushi Go Crafting** is a Minecraft mod. A food minecraft mod where you make sushi with a small discovery minigame to get the perfect food and get amazing food effects. This repository is a **port of it to [Horizon](https://github.com/horizon-rust/horizon)**, the Rust engine for Minecraft Java 26.3. It carries the complete source of the port plus the content files it ships, and installs as a single `.hmod` package.
 
-**One file ships:** `sushigocrafting.hmod` carries the code (`src/`) *and* the
-content (`assets/`, `data/`), so installing it gives the block, the items and the
-behaviour together.
+Upstream: [Buuz135/SushiGoCrafting](https://github.com/Buuz135/SushiGoCrafting) — licence **MIT**.
 
-## What this slice implements
+| | |
+|---|---|
+| Upstream mod | Sushi Go Crafting ([source](https://github.com/Buuz135/SushiGoCrafting)) |
+| Ported to | Horizon 0b14f8a, Minecraft Java 26.3, mod API `0.2` |
+| Package | `sushigocrafting.hmod` (install it with the Horizon launcher) |
+| Licence | **MIT** — the upstream mod's licence; see [Licence and credit](#licence-and-credit) |
+
+## What this port implements
+
+### What this slice implements
 
 The **cutting board**: one item slot that accepts only a cutting-board
 ingredient, a knife in the hand that strokes it, **six strokes per cut**, and the
@@ -38,58 +40,47 @@ the content declares the cleaver under both names: upstream's code tests the
 singular tag while its data ships only the plural one, so its own cleaver cannot
 cut on its own board (fixed here — see `notes.md`, "Upstream defects fixed").
 
-## What it does not (see `notes.md` §Gaps)
+## Not yet ported
 
-The rice cooker, fermentation barrel, roller and cooler box; every crop, the
-avocado tree and the two fish; the sushi foods and the roller's UI; the three mob
-effects; worldgen and loot modifiers; the guide book; and the client renderer
-(the item drawn on the board and the knife animation).
+- **The other four machines**: `rice_cooker` (4 input slots + fuel + an 8,000 mB
+- **Every crop** (`rice`, `cucumber`, `soy`, `sesame`, `wasabi`) and the
+- **The sources of the ingredients**: `ShrimpEntity`, `TunaEntity`, the
+- **The container filter for automation.** `container_accepts` is a **pending**
+- **Steady Hands** (`c:tools`-independent): upstream adds `(amplifier + 1) * min`
+- **The sushi foods and the `FoodItem`/`Roller` crafting chain** that consume the
+- **The cleaver-knife recipe needs `#c:ingots/iron`** from another mod: carried,
+- **The client half**: `CuttingBoardRenderer` (the item on the board and the
 
-The machine's **inputs** (cucumber, avocado, wasabi, fish) are not growable or
-catchable in this slice: growth is the measured content-crop gap
-(`ARCHITECTURE.md` §3). Give them in creative, or wait for the crop slice.
+## Installing
 
-## Building and checking
+1. Install the [Horizon launcher](https://github.com/horizon-rust/horizon/releases) (0.2.70 or newer).
+2. Add `sushigocrafting.hmod` to the instance's mods.
+3. The package is pinned to a specific Horizon build; the launcher checks that pin.
 
-```sh
-# everything runs inside the campaign's build-slot registry, never a bare cargo
-BUILD_LOCAL=1 ports/tools/build-slot.sh run --job sushigocrafting-sdk \
-    --port ports/sushigocrafting --step test -- \
-    bash -c 'cd ports/sushigocrafting && CARGO_INCREMENTAL=0 cargo test --offline'
+## Licence and credit
 
-BUILD_LOCAL=1 ports/tools/build-slot.sh run --job sushigocrafting-sdk \
-    --port ports/sushigocrafting --step build -- \
-    bash -c 'cd ports/sushigocrafting && rm -f Cargo.lock && cargo horizon-mod build'
+Sushi Go Crafting was created by its upstream authors; the code, models and assets in the original mod
+remain theirs and are used here under **MIT**. The Rust in this repository is a clean-room
+rewrite for Horizon, not a translation of the original source.
 
-cd ports/sushigocrafting
-cp target/horizon-mod/sushigocrafting.hmod ./sushigocrafting.hmod   # the deliverable
-cargo horizon-mod check sushigocrafting.hmod                        # exit 0
-cargo horizon-mod fits sushigocrafting.hmod --build nightly         # exit 0
-python3 tools/check_tags.py                                         # the knife-tag fix
+- `LICENSE` — the upstream licence text.
+- `LICENSE-NOTICE.md` — what this port carries and where it came from.
+- The upstream project: https://github.com/Buuz135/SushiGoCrafting
+
+## Technical details
+
+```
+horizon-mod.toml   package manifest (id, version, api, [native] pin)
+Cargo.toml         the crate; depends on `horizon-mod-api` from the fetched SDK
+src/               lib.rs (the one `impl Hooks`), runtime.rs (pure logic + tests), glue
+assets/ data/      the content the package ships
+tools/             content generators and the e2e scenario
 ```
 
-`.horizon/sdk/` is fetched by `cargo horizon-mod` (gitignored) and never packed.
-`assets/` and `data/` are regenerated from the ATM10 jar by
-`python3 tools/assemble_content.py` (reproducible: the same 61 files, byte for
-byte).
+- Build: `cargo horizon-mod build` (packages; it does not compile against the game).
+- Test: `cargo test`, `cargo clippy --all-targets -- -D warnings`.
+- In-game: `ports/tools/launcher-game.sh run sushigocrafting` in the campaign tree, or install the
+  `.hmod` and play; the harness scenario is `tools/e2e.sh`.
 
-## The in-game check
-
-```sh
-GAME=<horizon-client built by `horizon-launcher native-build ports/sushigocrafting`> \
-    tools/e2e.sh                 # SELFTEST=1 flips the amount assertion and must FAIL
-```
-
-A native `.hmod` cannot load on an unmodded game and there is no `--dev-mod`
-route for it, so the game must be launcher-built with this package.
-`horizon-launcher` is **not installed** in the campaign's current environment, so
-no 0.2.0 in-game run is claimed; the 0.1.0 runs in
-`../_shared/evidence/sushigocrafting/` stand as the behaviour's evidence for a
-`runtime.rs` that did not change (`notes.md`, "Gaps after the migration").
-
-## Licence
-
-MIT, read from the jar's `META-INF/neoforge.mods.toml` (licence rank 0); the
-assets carried from the jar are the same MIT project's. See [`LICENSE`](LICENSE)
-and [`LICENSE-NOTICE.md`](LICENSE-NOTICE.md), both inside the package.
-Local-only until the maintainer approves publishing (`ARCHITECTURE.md` §8).
+This repository is generated from the campaign's port at `ports/sushigocrafting/`; the port's own
+`notes.md` is the full record (decisions, traps, evidence).
