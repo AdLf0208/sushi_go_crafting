@@ -30,6 +30,7 @@
 //! | `perform_command` (8) | [`Hooks::run_mod_command`], on typed arguments |
 //! | the `content_root` injection (AE2 pattern) | gone: one flat `.hmod` carries `assets/` and `data/` itself |
 
+pub mod barrel;
 pub mod board;
 pub mod runtime;
 
@@ -45,9 +46,9 @@ struct Mod;
 
 #[mod_api::horizon_mod]
 impl Hooks for Mod {
-    /// Declare the board: its block entity type (one block entity for the block, starting
-    /// from an empty compound) and its one-slot container, then attach the Part that
-    /// answers the placement state and the click.
+    /// Declare the board and the fermentation barrel: their block entity types (one block
+    /// entity each, starting from an empty compound), their containers, the barrel's tank, and
+    /// the Parts that answer the placement state, the click, the tick and the screen.
     fn register(&self, registrar: &mut dyn Registrar, _cx: &RegistrationContext) {
         let block = registrar.block_key(board::BOARD);
         registrar.block_container(&block, board::container());
@@ -55,6 +56,18 @@ impl Hooks for Mod {
         // storage, and the click and the readout then find nothing.
         let _ = board::declare(registrar);
         registrar.block_part(block, board::BoardPart);
+
+        let barrel = registrar.block_key(barrel::BARREL);
+        registrar.block_container(&barrel, barrel::container());
+        registrar.block_fluids(&barrel, barrel::tanks());
+        // One Part on the block entity type: `block_entity_part` also puts its block half on
+        // every block of the type, which is what makes the bucket click reach it as well as the
+        // tick and the screen. A `block_part` call for the same type as well attaches it twice
+        // and the engine refuses the whole package.
+        let kind = barrel::declare(registrar);
+        if let Err(error) = registrar.block_entity_part(&kind, barrel::BarrelPart) {
+            _cx.refuse(&error.to_string());
+        }
     }
 
     /// Before content loads: register `sushigocrafting:amount`, the `AmountItem`
@@ -85,5 +98,35 @@ impl Hooks for Mod {
         let line = board::run_command(host, event.command);
         board::feedback(host, &line);
         Flow::Cancel
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The engine refuses a package that attaches one Part type to one block twice, or that
+    /// names a block entity type it did not declare. This runs the port's own `register`
+    /// through the SDK's registration path, so the assertion is the engine's own verdict
+    /// (`industrialforegoing`'s test): with the barrel's Part attached by `block_part` *and*
+    /// `block_entity_part`, it answered "… is attached to … twice".
+    #[test]
+    fn the_engine_accepts_every_part_of_this_package() {
+        let category = |_: &str| false;
+        let position = |_: &str| None;
+        let schema = mod_api::__private::RuleSchema {
+            category: &category,
+            position: &position,
+            rule_count: 0,
+        };
+        let mods = vec![mod_api::ModEntry::new("sushigocrafting", Box::new(Mod))];
+        let refused =
+            mod_api::__private::install_parts(&mods, &schema, |_: &mod_api::DimensionSettings| {
+                false
+            });
+        assert!(
+            refused.is_ok(),
+            "the engine refuses this package: {refused:?}"
+        );
     }
 }

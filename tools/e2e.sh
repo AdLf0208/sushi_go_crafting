@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# In-game check for Sushi Go Crafting slice 1: the cutting board.
+# In-game check for Sushi Go Crafting: the cutting board and the fermentation barrel.
 #
 # The board takes one ingredient, counts knife strokes and cuts on the sixth,
 # handing the player the jar's AmountItem with an amount inside the jar's range;
-# a non-knife strokes nothing, and a wrong item is never cut.
+# a non-knife strokes nothing, and a wrong item is never cut. The barrel is
+# crafted from its carried recipe, filled with a bucket, runs a 100-tick batch
+# on its tank and input, and gives the recipe's AmountItem with an amount inside
+# the jar's range — with no water it runs nothing.
 #
 # The package is one flat SDK `.hmod` (0.2.0) carrying the code AND the content, so
 # **GAME must be a game the launcher built with this package**:
@@ -24,10 +27,10 @@
 #
 # The End, in the void at x=200 (away from the central island and the ambient
 # item entities of a generated level). The board stands at x=202 on the stone
-# floor at y=100.
+# floor at y=100, the fermentation barrel at x=205.
 #
-# SELFTEST=1 flips the amount assertion (it must FAIL), proving the scenario can
-# fail.
+# SELFTEST=1 flips the cheese amount assertion and SELFTEST=board the board's
+# slice amount one (each must FAIL), proving the scenario can fail.
 set -Eeuo pipefail
 export LC_ALL=C
 [ -z "${SGC_DEBUG:-}" ] || set -x
@@ -48,8 +51,21 @@ CONTROL_WORLD=SushiGoCraftingControl
 # Where the board stands: the End's void, far from the central island.
 X0=200
 BX=$((X0 + 2))
+# The barrel stands east of the board, on the same floor.
+RX=$((X0 + 5))
+RZ=4
 BY=101
 BLOCK_ID=sushigocrafting:cutting_board
+BARREL_ID=sushigocrafting:fermentation_barrel
+CHEESE=sushigocrafting:cheese
+SOY=sushigocrafting:soy_sauce
+SOY_BEAN=sushigocrafting:soy_bean
+# The jar's amount bounds (`SushiContent.Items`): `amountItem("cheese", …, 50,
+# 250, 500)` and `amountItem("soy_sauce", …, 10, 50, 100)`.
+CHEESE_MIN=50
+CHEESE_MAX=249
+SOY_MIN=10
+SOY_MAX=49
 CUCUMBER=sushigocrafting:cucumber
 SLICES=sushigocrafting:cucumber_slices
 KNIFE=sushigocrafting:cleaver_knife
@@ -101,8 +117,12 @@ launch() { # launch WORLD GAME-BINARY
     local world=$1 game=$2
     rm -f "$SOCK"
     cd "$SCRATCH"
+    # `--offscreen`: a renderer with no window. The menu legs need the client's
+    # screen (`ctl screen`, `ctl click-slot`); headless has no renderer and those
+    # calls time out (measured here, 2026-11-21; botanypots' e2e is offscreen for
+    # the same reason).
     "$CTL" --socket "$SOCK" launch --game "$game" --world "$world" --seed 20261105 \
-        --creative --headless --wait --resources "$RES" >/dev/null
+        --creative --offscreen --wait --resources "$RES" >/dev/null
     ctl wait-ready 120
     ctl wait 40
 }
@@ -123,9 +143,9 @@ arena() {
         fi
     done
     [ "$loaded" = true ] || fail "the End arena chunk never loaded"
-    ctl command "execute in minecraft:the_end run fill $((X0 - 2)) 100 -14 $((X0 + 4)) 100 14 minecraft:stone" >/dev/null
+    ctl command "execute in minecraft:the_end run fill $((X0 - 2)) 100 -14 $((X0 + 8)) 100 14 minecraft:stone" >/dev/null
     ctl wait 6 >/dev/null
-    ctl command "execute in minecraft:the_end run fill $((X0 - 2)) 101 -14 $((X0 + 4)) 108 14 minecraft:air" >/dev/null
+    ctl command "execute in minecraft:the_end run fill $((X0 - 2)) 101 -14 $((X0 + 8)) 108 14 minecraft:air" >/dev/null
     ctl wait 6 >/dev/null
     ctl command "execute in minecraft:the_end run kill @e[type=!player]" >/dev/null
     ctl command "execute in minecraft:the_end run tp @s $X0.5 101 0.5" >/dev/null
@@ -144,6 +164,40 @@ board() { # board X Y Z
     eval "$(python3 "$PORT/tools/parse_info.py" "$INFO_LINE")"
     [ "${ok:-0}" = 1 ] || fail "the readout did not parse: $INFO_LINE"
     echo "  $INFO_LINE" >&2
+}
+
+
+# `/sushigocrafting barrel X Y Z`: the line, then the parsed fields in BLOCK,
+# INPUT, ICOUNT, FLUID, MB, CAP, PROGRESS, PER, NEXT, AMIN and AMAX.
+barrel() { # barrel X Y Z
+    say "sushigocrafting barrel $1 $2 $3"
+    ctl wait 12 >/dev/null
+    local line
+    line=$(ctl messages 12 | jq -r '.chat[]' | grep -m1 'sushigocrafting:fermentation_barrel at' || true)
+    [ -n "$line" ] || fail "no /sushigocrafting barrel reply"
+    eval "$(python3 "$PORT/tools/parse_barrel.py" "$line")"
+    [ "${ok:-0}" = 1 ] || fail "the barrel readout did not parse: $line"
+    BARREL_LINE=$line
+    echo "  $line" >&2
+}
+
+# Right-click the barrel once with what the player holds, aimed at it.
+click_barrel() {
+    ctl command "execute in minecraft:the_end run tp @s $((RX - 2)).5 $BY $RZ.5" >/dev/null
+    ctl wait 4 >/dev/null
+    ctl look-at-block "$RX" "$BY" "$RZ" west >/dev/null || fail "cannot aim at the barrel"
+    ctl interact "$RX" "$BY" "$RZ" west >/dev/null || fail "the right click on the barrel failed"
+    ctl wait 4 >/dev/null
+}
+
+# The barrel's container as the engine reports it: one line per occupied slot as
+# `slot:item xcount components`, or `empty` when every slot is empty.
+container_items() { # container_items X Y Z
+    # The reply's slots carry the item and count; the index is the slot number
+    # (the mod container's own array, so slot 0 is the input, 1 the output).
+    ctl container "$1" "$2" "$3" \
+        | jq -r '[.slots | to_entries[] | select(.value != null and .value.item != null) | "\(.key):\(.value.item) x\(.value.count) \(.value.components // "")"] | join(" | ")' \
+        | sed 's/^$/empty/'
 }
 
 # Put exactly one stack in a hotbar slot and select it (`give` may fill a main
@@ -219,8 +273,12 @@ expect() { # expect NAME ACTUAL WANT
     [ "$2" = "$3" ] || fail "$1 is $2, expected $3"
 }
 
-# The fail-capable e2e must prove it can fail: SELFTEST=1 flips the amount range.
-[ "$SELFTEST" = 1 ] && echo "(selftest: the amount assertion is inverted; this run must FAIL)"
+# The fail-capable e2e must prove it can fail: SELFTEST=1 flips the cheese amount
+# range (this slice's family), and SELFTEST=board flips the board's.
+case "$SELFTEST" in
+    1) echo "(selftest: the cheese amount assertion is inverted; this run must FAIL)" ;;
+    board) echo "(selftest=board: the board's slice amount assertion is inverted; this run must FAIL)" ;;
+esac
 
 # Upstream's `CuttingBoardTile` tests `c:tools/knife` while its data ships only
 # `c:tools/knives`; the port declares the cleaver under both (notes.md,
@@ -244,6 +302,10 @@ expect "the next output" "$NEXT" none
 echo "  block $(block_name "$BX" "$BY" 0), empty board"
 
 echo "== B: a cucumber goes in from the hand and leaves the inventory =="
+# Survival: a creative hand gives without losing any (`ItemAccess.extract`'s documented
+# behaviour), so the "moved, not copied" assertion needs a survival player.
+ctl command "gamemode survival @s" >/dev/null
+ctl wait 4
 hold 2 "$CUCUMBER" 2
 click_board
 board "$BX" "$BY" 0
@@ -300,9 +362,9 @@ AMOUNT=$(python3 "$PORT/tools/amount_of.py" "$COMPONENTS" || true)
 # scenario must then fail on the amount, proving the check is not vacuous.
 WANT_MIN=$SLICES_MIN
 WANT_MAX=$SLICES_MAX
-if [ "$SELFTEST" = 1 ]; then
+if [ "$SELFTEST" = board ]; then
     WANT_MIN=$((SLICES_MAX + 1))
-    echo "(selftest: asserting the amount is in $WANT_MIN..$WANT_MAX)"
+    echo "(selftest=board: asserting the slice amount is in $WANT_MIN..$WANT_MAX)"
 fi
 [ "$AMOUNT" -ge "$WANT_MIN" ] && [ "$AMOUNT" -le "$WANT_MAX" ] \
     || fail "the slice amount is $AMOUNT, expected $WANT_MIN..$WANT_MAX"
@@ -310,9 +372,15 @@ echo "  one cut: amount $AMOUNT in $SLICES_MIN..$SLICES_MAX, one slice in the in
 
 echo "== F: a sneak with an empty hand hands the stack back =="
 hold 5 minecraft:air 1
+# The key state is applied on the client's next frame, so let it settle before
+# the click (measured under `--offscreen`, 2026-11-21: without the waits the
+# server heard the click before the shift key was down).
 ctl key shift down >/dev/null
+ctl wait 4 >/dev/null
 click_board
+ctl wait 4 >/dev/null
 ctl key shift up >/dev/null
+ctl wait 4 >/dev/null
 board "$BX" "$BY" 0
 expect "the input after the hand-back" "$INPUT" none
 expect "the cucumber back in the inventory" "$(count_of "$CUCUMBER")" 1
@@ -339,10 +407,204 @@ expect "the input still dirt" "$INPUT" minecraft:dirt
 expect "the cucumber slices after cutting dirt" "$(count_of "$SLICES")" 1
 echo "  dirt in the slot: next=none, six strokes give nothing"
 
+echo "== G2 (review fix): the readout refuses another mod's or a vanilla block entity =="
+CHEST_X=$((BX + 2))
+ctl command "setblock $CHEST_X $BY 0 minecraft:chest" >/dev/null
+ctl command "item replace block $CHEST_X $BY 0 container.0 with minecraft:diamond 3" >/dev/null
+ctl wait 6
+say "sushigocrafting board $CHEST_X $BY 0"
+ctl wait 12
+line=$(ctl messages 12 | jq -r '.chat[]' | grep -m1 'is not a mod block entity' || true)
+echo "  reply: ${line:-<none>}"
+[ -n "$line" ] || fail "the board readout did not refuse a vanilla chest"
+case "$line" in
+    *minecraft:diamond*) fail "the board readout disclosed the chest's slot: $line" ;;
+esac
+
+ctl command "gamemode creative @s" >/dev/null
+ctl wait 4
+
 echo "== H: the board's own crafting recipe is the jar's =="
 ctl command "execute in minecraft:the_end run give @s minecraft:oak_slab 3" >/dev/null
 ctl command "execute in minecraft:the_end run give @s minecraft:oak_log 2" >/dev/null
 ctl wait 4 >/dev/null
 echo "  (recipe matching is Horizon's crafting engine; the shape lives in data/sushigocrafting/recipe/cutting_board.json)"
 
-echo "PASS: the board registers and places with its subfacing set from the placer's yaw; a cucumber goes into its one slot and leaves the hand; a stick strokes nothing while five knife strokes count to 5 and cut nothing; the sixth stroke cuts exactly one sushigocrafting:cucumber_slices whose amount sits in the jar's 50..199 range; a sneak with an empty hand hands the stack back; and a wrong item (dirt) is never a recipe input and never cuts"
+
+echo "== I: the barrel's carried recipe crafts one from vanilla ingredients =="
+# `data/sushigocrafting/recipe/fermentation_barrel.json` (IGI/IFI/III over planks,
+# a wooden pressure plate and a furnace) — the first recipe of this port that a
+# bare 26.3 can satisfy, so it is crafted the way it declares and its grid is
+# asserted consumed. The crate must stand in loaded air of the arena.
+python3 "$PORT/tools/craft_barrel.py" "$SOCK" "$CTL" "$((RX + 2))" "$BY" -4 \
+    || fail "the barrel's own recipe did not craft"
+ctl command "gamemode creative @s" >/dev/null
+ctl wait 4
+[ "$(count_of "$BARREL_ID")" -ge 1 ] || fail "the crafted barrel is not in the inventory"
+
+echo "== J: the barrel places and reads empty =="
+ctl command "execute in minecraft:the_end run tp @s $((RX - 2)).5 $BY $RZ.5" >/dev/null
+ctl wait 6 >/dev/null
+hold 1 "$BARREL_ID" 2
+ctl look-at-block "$RX" $((BY - 1)) "$RZ" up >/dev/null || fail "cannot aim at the floor under the barrel"
+ctl place "$RX" "$BY" "$RZ" --item "$BARREL_ID" >/dev/null || fail "ctl place at $RX,$BY,$RZ failed"
+ctl wait 6 >/dev/null
+expect "the placed barrel" "$(block_name "$RX" "$BY" "$RZ")" "$BARREL_ID"
+barrel "$RX" "$BY" "$RZ"
+expect "the readout's block" "$BLOCK" "$BARREL_ID"
+expect "an empty barrel's input" "$INPUT" none
+expect "an empty barrel's fluid" "$FLUID" none
+expect "an empty barrel's tank" "$MB" 0
+expect "an empty barrel's capacity" "$CAP" 2000
+expect "an empty barrel's bar" "$PROGRESS" 0
+expect "an empty barrel's next output" "$NEXT" none
+
+echo "== K: a milk bucket fills the tank, and the tank only takes what it holds =="
+# Survival: a creative hand gives without losing any, so "the bucket left the
+# hand" needs a survival player.
+ctl command "gamemode survival @s" >/dev/null
+ctl wait 4
+# A milk bucket does not stack, so one in the hand: two would be refused and the
+# click would open the menu instead ("milk_bucket can only stack up to 1").
+hold 2 minecraft:milk_bucket 1
+click_barrel
+barrel "$RX" "$BY" "$RZ"
+expect "the tank's fluid after a milk bucket" "$FLUID" minecraft:milk
+expect "the tank's millibuckets after a milk bucket" "$MB" 1000
+expect "the milk bucket left the hand" "$(count_of minecraft:milk_bucket)" 0
+expect "an empty bucket came back" "$(count_of minecraft:bucket)" 1
+# `Action.FILL`: an empty bucket never drains the tank, so the harness's doubled
+# click left the milk in place.
+hold 3 minecraft:bucket 1
+click_barrel
+barrel "$RX" "$BY" "$RZ"
+expect "the tank after an empty bucket" "$MB" 1000
+echo "  the tank holds 1000 mB of milk and gives none back to a bucket"
+
+echo "== L: one 100-tick batch gives the jar's cheese and drains 250 mB =="
+# One batch's worth of milk: the harness tank setter, so the leg is exact (a
+# bucket would leave four batches queued and the reads below take ticks).
+say "sushigocrafting tank $RX $BY $RZ minecraft:milk 250"
+ctl wait 12 >/dev/null
+barrel "$RX" "$BY" "$RZ"
+expect "the tank set to one batch" "$MB" 250
+expect "the recipe the tank and empty slot make" "$NEXT" "$CHEESE"
+expect "the cheese amount range's low end" "$AMIN" "$CHEESE_MIN"
+expect "the cheese amount range's high end" "$AMAX" "$CHEESE_MAX"
+for _ in $(seq 1 12); do
+    ctl wait 12 >/dev/null
+    OUT=$(container_items "$RX" "$BY" "$RZ")
+    case "$OUT" in *"$CHEESE"*) break ;; esac
+done
+echo "  container after the batch: $OUT" >&2
+case "$OUT" in
+    *"$CHEESE"*) ;;
+    *) fail "the barrel gave no cheese after 100 ticks: $OUT" ;;
+esac
+barrel "$RX" "$BY" "$RZ"
+expect "the tank after one batch" "$FLUID" none
+expect "the tank's millibuckets after one batch" "$MB" 0
+expect "the bar after the batch" "$PROGRESS" 0
+expect "the input after a cheese batch" "$INPUT" none
+# Take it out through the menu, as a player does: 300 is the input, 301 the output.
+hold 1 minecraft:air 1
+ctl command "execute in minecraft:the_end run tp @s $((RX - 2)).5 $BY $RZ.5" >/dev/null
+ctl wait 4 >/dev/null
+ctl look-at-block "$RX" "$BY" "$RZ" west >/dev/null || fail "cannot aim at the barrel"
+ctl interact "$RX" "$BY" "$RZ" west >/dev/null || fail "the barrel did not open its menu"
+ctl wait-for screen container --timeout 10 >/dev/null || fail "the barrel's menu did not open"
+MENU_SLOTS=$(ctl screen | jq '[.slots[] | select(.slot >= 300)] | length')
+expect "the barrel's menu slots" "$MENU_SLOTS" 2
+ctl click-slot 301 shift >/dev/null || fail "cannot take the cheese out of the barrel"
+ctl wait 4 >/dev/null
+ctl close >/dev/null 2>&1 || true
+ctl wait 4 >/dev/null
+expect "the cheese in the inventory" "$(count_of "$CHEESE")" 1
+COMPONENTS=$(components_of "$CHEESE")
+echo "  cheese components: $COMPONENTS" >&2
+AMOUNT=$(python3 "$PORT/tools/amount_of.py" "$COMPONENTS" || true)
+[ -n "$AMOUNT" ] || fail "the cheese stack carries no sushigocrafting:amount component: $COMPONENTS"
+WANT_MIN=$CHEESE_MIN
+WANT_MAX=$CHEESE_MAX
+if [ "$SELFTEST" = 1 ]; then
+    # SELFTEST=1 asks the same question with an impossible range (250..249): the
+    # scenario must then fail on the amount, proving the check is not vacuous.
+    WANT_MIN=$((CHEESE_MAX + 1))
+    echo "(selftest: asserting the cheese amount is in $WANT_MIN..$WANT_MAX)"
+fi
+[ "$AMOUNT" -ge "$WANT_MIN" ] && [ "$AMOUNT" -le "$WANT_MAX" ] \
+    || fail "the cheese amount is $AMOUNT, expected $WANT_MIN..$WANT_MAX"
+echo "  one batch: cheese amount $AMOUNT in $CHEESE_MIN..$CHEESE_MAX, the tank drained to 0"
+
+echo "== M: a soy bean and water ferment into soy sauce through the menu's input slot =="
+hold 2 "$SOY_BEAN" 1
+ctl command "execute in minecraft:the_end run tp @s $((RX - 2)).5 $BY $RZ.5" >/dev/null
+ctl wait 4 >/dev/null
+hold 9 minecraft:air 1
+ctl look-at-block "$RX" "$BY" "$RZ" west >/dev/null
+ctl interact "$RX" "$BY" "$RZ" west >/dev/null || fail "the barrel did not open its menu"
+ctl wait-for screen container --timeout 10 >/dev/null || fail "the barrel's menu did not open again"
+# The menu click moves the cursor stack: pick the bean up, then drop it into 300.
+SRC=$(ctl screen | jq -r --arg i "$SOY_BEAN" '[.slots[] | select(.slot < 36 and .item == $i) | .slot] | .[0] // ""')
+[ -n "$SRC" ] || fail "$SOY_BEAN is not in the inventory to place"
+ctl click-slot "$SRC" >/dev/null || fail "cannot pick up the soy bean"
+ctl wait 2 >/dev/null
+ctl click-slot 300 >/dev/null || fail "cannot put the soy bean in the barrel's input slot"
+ctl wait 2 >/dev/null
+ctl close >/dev/null 2>&1 || true
+ctl wait 4 >/dev/null
+barrel "$RX" "$BY" "$RZ"
+expect "the input through the menu" "$INPUT" "$SOY_BEAN"
+say "sushigocrafting tank $RX $BY $RZ minecraft:water 250"
+ctl wait 12 >/dev/null
+barrel "$RX" "$BY" "$RZ"
+expect "the soy recipe's fluid" "$FLUID" minecraft:water
+expect "the soy recipe's next output" "$NEXT" "$SOY"
+for _ in $(seq 1 12); do
+    ctl wait 12 >/dev/null
+    OUT=$(container_items "$RX" "$BY" "$RZ")
+    case "$OUT" in *"$SOY"*) break ;; esac
+done
+echo "  container after the soy batch: $OUT" >&2
+case "$OUT" in
+    *"$SOY"*) ;;
+    *) fail "the barrel gave no soy sauce after 100 ticks: $OUT" ;;
+esac
+barrel "$RX" "$BY" "$RZ"
+expect "the input after a soy batch" "$INPUT" none
+expect "the tank after a soy batch" "$MB" 0
+SOY_LEFT=$(container_items "$RX" "$BY" "$RZ")
+case "$SOY_LEFT" in
+    *"$SOY_BEAN"*) fail "the soy bean was not consumed: $SOY_LEFT" ;;
+esac
+echo "  one batch: soy sauce in the output, the bean and 250 mB of water consumed"
+
+echo "== N: the differential — a soy bean with no water ferments nothing =="
+RX2=$((RX + 2))
+hold 1 "$BARREL_ID" 1
+ctl command "execute in minecraft:the_end run tp @s $((RX2 - 2)).5 $BY $RZ.5" >/dev/null
+ctl wait 4 >/dev/null
+ctl place "$RX2" "$BY" "$RZ" --item "$BARREL_ID" >/dev/null || fail "ctl place for the control barrel failed"
+ctl wait 6 >/dev/null
+expect "the control barrel" "$(block_name "$RX2" "$BY" "$RZ")" "$BARREL_ID"
+ctl container "$RX2" "$BY" "$RZ" "$SOY_BEAN" 1 >/dev/null || fail "cannot fill the control barrel"
+ctl wait 4 >/dev/null
+for _ in $(seq 1 10); do ctl wait 12 >/dev/null; done
+barrel "$RX2" "$BY" "$RZ"
+expect "the control's input" "$INPUT" "$SOY_BEAN"
+expect "the control's next output" "$NEXT" none
+expect "the control's bar" "$PROGRESS" 0
+CONTROL_OUT=$(container_items "$RX2" "$BY" "$RZ")
+case "$CONTROL_OUT" in
+    *"$SOY"*) fail "a barrel with no water fermented soy sauce: $CONTROL_OUT" ;;
+esac
+echo "  no water: progress stays 0 and 120 ticks give nothing ($CONTROL_OUT)"
+
+echo "== O: the tank setter clamps to the declaration's capacity =="
+say "sushigocrafting tank $RX2 $BY $RZ minecraft:water 2500"
+ctl wait 12 >/dev/null
+barrel "$RX2" "$BY" "$RZ"
+expect "a 2,500 mB request in a 2,000 mB tank" "$MB" 2000
+expect "the requested fluid" "$FLUID" minecraft:water
+
+echo "PASS: the board registers and places with its subfacing set from the placer's yaw; a cucumber goes into its one slot and leaves the hand; a stick strokes nothing while five knife strokes count to 5 and cut nothing; the sixth stroke cuts exactly one sushigocrafting:cucumber_slices whose amount sits in the jar's 50..199 range; a sneak with an empty hand hands the stack back; and a wrong item (dirt) is never a recipe input and never cuts; the fermentation barrel is crafted from its carried vanilla recipe, a milk bucket fills its 2,000 mB tank and gives no fluid back, one 100-tick batch gives a sushigocrafting:cheese whose amount sits in the jar's 50..249 range and drains 250 mB, a soy bean in the menu's input slot with water ferments into soy sauce and is consumed, a barrel with no water ferments nothing, and the tank setter clamps at the declared capacity"

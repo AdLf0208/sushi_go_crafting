@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Build the package's `assets/` + `data/` for the cutting board from the ATM10 jar.
+"""Build the package's `assets/` + `data/` for the cutting board and the barrel from the ATM10 jar.
 
-Carries the board's blockstate, block model and texture, the eleven items' models
-and textures, and the lang strings that name them; re-spells the loot table and
-the crafting recipe in 26.3's shape; and writes the declarations this campaign
-owns (the block, the items, the creative tab, the tags).
+Carries the board's and the barrel's blockstate, block model and texture, the
+items' models and textures, and the lang strings that name them; re-spells the
+loot tables and the crafting recipes in 26.3's shape; and writes the
+declarations this campaign owns (the blocks, the items, the menu, the creative
+tab, the tags).
 
 Every decision is recorded in `CONTENT.md`. Rerun it to rebuild: it deletes the
 `assets/sushigocrafting/` and `data/` trees it owns first, so the output is
@@ -22,10 +23,12 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_JAR = ROOT.parent / "_shared/licence-cache/sushigocrafting-1.21-0.6.7.jar"
 NS = "sushigocrafting"
 
-# The board and the eleven items the cutting board's loop needs: its six recipe
-# inputs (`FINDINGS.md`) and its six outputs.
+# The two machines and the items their loops need: the board's six recipe inputs
+# and six outputs (`FINDINGS.md`), and the barrel's one tag input and two
+# outputs (`recipe/fermenting_barrel/*.json`).
 BLOCK = "cutting_board"
-PLAIN_ITEMS = ["cucumber", "avocado", "wasabi_root", "raw_tuna", "cleaver_knife"]
+BARREL = "fermentation_barrel"
+PLAIN_ITEMS = ["cucumber", "avocado", "wasabi_root", "raw_tuna", "cleaver_knife", "soy_bean"]
 # (name, min, max, combine, poison probability) from `SushiContent.Items`
 # `amountItem(...)` calls and `AmountItem`'s food builder.
 AMOUNT_ITEMS = [
@@ -35,6 +38,8 @@ AMOUNT_ITEMS = [
     ("salmon_fillet", 500, 2000, 4000, 0.01),
     ("tuna_fillet", 1000, 3000, 6000, 0.01),
     ("wasabi_paste", 10, 50, 100, 0.6),
+    ("cheese", 50, 250, 500, 0.01),
+    ("soy_sauce", 10, 50, 100, 0.6),
 ]
 ITEMS = PLAIN_ITEMS + [entry[0] for entry in AMOUNT_ITEMS]
 
@@ -42,6 +47,19 @@ ITEMS = PLAIN_ITEMS + [entry[0] for entry in AMOUNT_ITEMS]
 # `Block.box(3, 0, 1, 13, 1, 15)` for east/west (`CuttingBoardBlock`).
 SHAPE_NS = [[0.0625, 0.0, 0.1875, 0.9375, 0.0625, 0.8125]]
 SHAPE_EW = [[0.1875, 0.0, 0.0625, 0.8125, 0.0625, 0.9375]]
+
+# The barrel's shape: the eight boxes `FermentationBarrelBlock.NORMAL` unions (the staves
+# and the base, the hoop, the two uprights and the two posts), in block units over 16.
+BARREL_SHAPE = [
+    [2 / 16, 1 / 16, 1 / 16, 14 / 16, 15 / 16, 2 / 16],
+    [2 / 16, 1 / 16, 14 / 16, 14 / 16, 15 / 16, 15 / 16],
+    [2 / 16, 0.0, 2 / 16, 14 / 16, 1 / 16, 14 / 16],
+    [2 / 16, 14.5 / 16, 2 / 16, 14 / 16, 15.5 / 16, 14 / 16],
+    [1 / 16, 1 / 16, 2 / 16, 2 / 16, 15 / 16, 14 / 16],
+    [14 / 16, 1 / 16, 2 / 16, 15 / 16, 15 / 16, 14 / 16],
+    [4 / 16, 15 / 16, 6 / 16, 5 / 16, 1.0, 10 / 16],
+    [11 / 16, 15 / 16, 6 / 16, 12 / 16, 1.0, 10 / 16],
+]
 
 # The item tags for these items (`data/c/tags/item/**`). Upstream's code tests
 # `c:tools/knife` (singular) while its own data ships only `c:tools/knives`
@@ -57,6 +75,7 @@ TAGS = {
     "c/tags/item/raw_fishes/salmon": ["minecraft:salmon"],
     "c/tags/item/tools/knives": ["sushigocrafting:cleaver_knife"],
     "c/tags/item/tools/knife": ["sushigocrafting:cleaver_knife"],
+    "c/tags/item/crops/soybean": ["sushigocrafting:soy_bean"],
 }
 
 
@@ -110,6 +129,48 @@ def block_declaration():
     }
 
 
+def barrel_declaration():
+    # `FermentationBarrelBlock`: `Properties.ofFullCopy(Blocks.OAK_WOOD)` (hardness 2.0,
+    # blast resistance 3.0, wooden sounds), `RotationType.NONE` (no state property), and
+    # `NORMAL` for both shapes. The template is vanilla's barrel so the block opens a menu
+    # as a container does; `item: true` gives it the item that places it.
+    return {
+        "template": "minecraft:barrel",
+        "properties": {
+            "hardness": 2.0,
+            "explosion_resistance": 3.0,
+            "requires_tool": False,
+            "sounds": "minecraft:oak_wood",
+            "occludes": False,
+        },
+        "item": True,
+        "shapes": {"default": BARREL_SHAPE},
+        "collision_shapes": {"default": BARREL_SHAPE},
+    }
+
+
+def barrel_blockstate():
+    # The jar's own state is `{"variants": {"": …}}` because upstream's block has no
+    # properties (`RotationType.NONE`). The `minecraft:barrel` template it is declared on
+    # carries vanilla's `facing` and `open`, so the state must be spelled out for them:
+    # the model is symmetric about its axis, so a `y` rotation changes nothing visible.
+    y = {"north": None, "east": 90, "south": 180, "west": 270}
+    variants = {}
+    for facing, rotation in y.items():
+        for open_ in ("false", "true"):
+            variant = {"model": f"{NS}:block/{BARREL}"}
+            if rotation is not None:
+                variant["y"] = rotation
+            variants[f"facing={facing},open={open_}"] = variant
+    return {"variants": variants}
+
+
+def barrel_menu():
+    # The two slots and the two progress data slots (`native_block_entity_container`'s menu);
+    # the output is a result slot, which players take from and automation reaches as `outputs`.
+    return {"slots": 2, "data_slots": 2, "results": [1]}
+
+
 def plain_item_declaration():
     return {"template": "minecraft:paper"}
 
@@ -143,18 +204,18 @@ def amount_item_declaration(poison):
     }
 
 
-def loot_table():
+def loot_table(block=BLOCK):
     # 26.3: one typed condition on the pool (the jar's 1.21.1 `conditions` list).
     return {
         "type": "minecraft:block",
         "pools": [
             {
                 "condition": {"type": "minecraft:survives_explosion"},
-                "entries": [{"type": "minecraft:item", "name": f"{NS}:{BLOCK}"}],
+                "entries": [{"type": "minecraft:item", "name": f"{NS}:{block}"}],
                 "rolls": 1,
             }
         ],
-        "random_sequence": f"{NS}:blocks/{BLOCK}",
+        "random_sequence": f"{NS}:blocks/{block}",
     }
 
 
@@ -171,6 +232,24 @@ def board_recipe():
     }
 
 
+def barrel_recipe():
+    # The jar's `recipe/fermentation_barrel.json`, re-spelled: `#tag` for a tag, a bare item
+    # id otherwise, and the `neoforge:item_exists` gate dropped. Its ingredients are all
+    # vanilla's (`minecraft:furnace`, planks, wooden pressure plates), so it is craftable in
+    # a bare 26.3 — unlike the cleaver's `#c:ingots/iron`.
+    return {
+        "type": "minecraft:crafting_shaped",
+        "category": "misc",
+        "key": {
+            "F": "minecraft:furnace",
+            "G": "#minecraft:wooden_pressure_plates",
+            "I": "#minecraft:planks",
+        },
+        "pattern": ["IGI", "IFI", "III"],
+        "result": {"count": 1, "id": f"{NS}:{BARREL}"},
+    }
+
+
 def knife_recipe():
     return {
         "type": "minecraft:crafting_shaped",
@@ -183,7 +262,11 @@ def knife_recipe():
 
 def lang(jar):
     carried = json.loads(read(jar, f"assets/{NS}/lang/en_us.json"))
-    keys = [f"block.{NS}.{BLOCK}", "itemGroup.sushigocrafting"]
+    keys = [
+        f"block.{NS}.{BLOCK}",
+        f"block.{NS}.{BARREL}",
+        "itemGroup.sushigocrafting",
+    ]
     keys += [f"item.{NS}.{name}" for name in ITEMS]
     return {key: carried[key] for key in keys}
 
@@ -203,10 +286,19 @@ def main():
     # Carried byte-for-byte from the jar.
     carry(jar, f"assets/{NS}/blockstates/{BLOCK}.json",
           content / "assets" / NS / "blockstates" / f"{BLOCK}.json")
-    carry(jar, f"assets/{NS}/models/block/{BLOCK}.json",
-          content / "assets" / NS / "models/block" / f"{BLOCK}.json")
-    carry(jar, f"assets/{NS}/textures/block/{BLOCK}.png",
-          content / "assets" / NS / "textures/block" / f"{BLOCK}.png")
+    for block in (BLOCK, BARREL):
+        carry(jar, f"assets/{NS}/models/block/{block}.json",
+              content / "assets" / NS / "models/block" / f"{block}.json")
+        carry(jar, f"assets/{NS}/textures/block/{block}.png",
+              content / "assets" / NS / "textures/block" / f"{block}.png")
+        write_json(
+            content / "assets" / NS / "models/item" / f"{block}.json",
+            json.loads(read(jar, f"assets/{NS}/models/item/{block}.json")),
+        )
+        write_json(
+            content / "assets" / NS / "items" / f"{block}.json",
+            {"model": {"type": "minecraft:model", "model": f"{NS}:item/{block}"}},
+        )
     for name in ITEMS:
         model = json.loads(read(jar, f"assets/{NS}/models/item/{name}.json"))
         write_json(content / "assets" / NS / "models/item" / f"{name}.json", model)
@@ -220,10 +312,13 @@ def main():
             {"model": {"type": "minecraft:model", "model": f"{NS}:item/{name}"}},
         )
 
+    write_json(content / "assets" / NS / "blockstates" / f"{BARREL}.json", barrel_blockstate())
     write_json(content / "assets" / NS / "lang/en_us.json", lang(jar))
 
     # Written here: the declarations, the 26.3 spellings and the slice's tags.
     write_json(content / "data" / NS / "horizon/block" / f"{BLOCK}.json", block_declaration())
+    write_json(content / "data" / NS / "horizon/block" / f"{BARREL}.json", barrel_declaration())
+    write_json(content / "data" / NS / "horizon/menu" / f"{BARREL}.json", barrel_menu())
     for name in PLAIN_ITEMS:
         write_json(content / "data" / NS / "horizon/item" / f"{name}.json",
                    plain_item_declaration())
@@ -234,18 +329,22 @@ def main():
         content / "data" / NS / "horizon/creative_tab" / "sushigocrafting.json",
         {
             "icon": f"{NS}:{BLOCK}",
-            "items": [f"{NS}:{BLOCK}"] + [f"{NS}:{name}" for name in ITEMS],
+            "items": [f"{NS}:{BLOCK}", f"{NS}:{BARREL}"]
+            + [f"{NS}:{name}" for name in ITEMS],
             "title": "itemGroup.sushigocrafting",
         },
     )
     write_json(content / "data" / NS / "loot_table/blocks" / f"{BLOCK}.json", loot_table())
+    write_json(content / "data" / NS / "loot_table/blocks" / f"{BARREL}.json",
+               loot_table(BARREL))
     write_json(content / "data" / NS / "recipe" / f"{BLOCK}.json", board_recipe())
+    write_json(content / "data" / NS / "recipe" / f"{BARREL}.json", barrel_recipe())
     write_json(content / "data" / NS / "recipe/cleaver_knife.json", knife_recipe())
     for path, values in TAGS.items():
         write_json(content / "data" / Path(path).with_suffix(".json"), {"values": values})
     write_json(
         content / "data/minecraft/tags/block/mineable/axe.json",
-        {"values": [f"{NS}:{BLOCK}"]},
+        {"values": [f"{NS}:{BLOCK}", f"{NS}:{BARREL}"]},
     )
 
     files = sorted(

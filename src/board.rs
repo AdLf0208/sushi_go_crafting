@@ -15,7 +15,7 @@ use mod_api::{
 };
 
 use crate::runtime::{
-    Recipe, Stroke, accepts, cut_amount, facing_for_yaw, fits, is_knife, recipe_for, stroke,
+    BoardRecipe, Stroke, accepts, cut_amount, facing_for_yaw, fits, is_knife, recipe_for, stroke,
     summary,
 };
 
@@ -117,7 +117,7 @@ impl BlockPart for BoardPart {
 struct Observed {
     slot: Option<ItemStack>,
     clicks: u32,
-    recipe: Option<&'static Recipe>,
+    recipe: Option<&'static BoardRecipe>,
     knife: bool,
     ingredient: bool,
 }
@@ -271,7 +271,7 @@ fn cut(
     host: &mut dyn ServerHost,
     level: LevelRef,
     pos: [i32; 3],
-    recipe: &'static Recipe,
+    recipe: &'static BoardRecipe,
     slot: ItemStack,
     player: u128,
 ) {
@@ -296,7 +296,7 @@ fn cut(
         Ok::<(), ()>(())
     });
 
-    let Some(output) = output_stack(&*host, recipe, amount) else {
+    let Some(output) = amount_stack(&*host, recipe.output, amount) else {
         return;
     };
     if let Some(player) = host.player(player) {
@@ -307,8 +307,8 @@ fn cut(
 /// The recipe's output stack carrying its amount, through the component patch (the
 /// registered `sushigocrafting:amount`, so the stack keeps it through saves and reaches
 /// the client).
-fn output_stack(host: &dyn Host, recipe: &'static Recipe, amount: u32) -> Option<ItemStack> {
-    let mut output = ItemStack::new(item_key(host, recipe.output)?, 1)?;
+pub(crate) fn amount_stack(host: &dyn Host, item: &str, amount: u32) -> Option<ItemStack> {
+    let mut output = ItemStack::new(item_key(host, item)?, 1)?;
     let mut patch = Compound::new();
     patch.insert(
         AMOUNT.into(),
@@ -327,7 +327,7 @@ fn item_key(host: &dyn Host, id: &str) -> Option<ItemKey> {
 /// Whether `item` (an id) is in the item tag `tag`, over the merged tags: what
 /// `native_server_item_in_tag` read in the retired port. Both knife spellings are tested
 /// here, so the upstream defect stays fixed (`notes.md`, "Upstream defects fixed").
-fn in_tag(host: &dyn Host, item: &str, tag: &str) -> bool {
+pub(crate) fn in_tag(host: &dyn Host, item: &str, tag: &str) -> bool {
     let Ok(identifier) = Identifier::parse(tag) else {
         return false;
     };
@@ -372,38 +372,60 @@ fn write_clicks(host: &mut dyn ServerHost, level: LevelRef, pos: [i32; 3], click
 // ---------------------------------------------------------------------------
 
 /// The commands (`register_commands`). Upstream has none: they exist so a player and the
-/// harness can read the board without a GUI (precedent: `/naturesaura altar`,
+/// harness can read the board and the barrel without a GUI (precedent: `/naturesaura altar`,
 /// `/industrialforegoing info`).
 pub(crate) fn declare_commands(event: &mut RegisterCommandsEvent<'_>) {
     event
         .commands
         .push(Command::new("sushigocrafting board <pos:block_pos>"));
+    event
+        .commands
+        .push(Command::new("sushigocrafting barrel <pos:block_pos>"));
     event.commands.push(Command::op(
         "sushigocrafting clicks <pos:block_pos> <clicks:integer>",
+        2,
+    ));
+    event.commands.push(Command::op(
+        "sushigocrafting tank <pos:block_pos> <fluid:id> <mb:integer>",
         2,
     ));
 }
 
 /// The command bodies, on the typed invocation: `board` is the readout, `clicks` sets the
 /// stroke count first (a harness control — `ctl interact` holds the button across two
-/// ticks and can be heard twice, so a leg needs to stand at exactly five strokes).
+/// ticks and can be heard twice, so a leg needs to stand at exactly five strokes), `barrel`
+/// reads the fermentation barrel and `tank` sets its tank.
 pub(crate) fn run_command(host: &mut dyn ServerHost, invocation: &CommandInvocation) -> String {
-    const USAGE: &str = "usage: /sushigocrafting board <x> <y> <z> | clicks <x> <y> <z> <n>";
+    const USAGE: &str = "usage: /sushigocrafting board <x> <y> <z> | clicks <x> <y> <z> <n> | barrel <x> <y> <z> | tank <x> <y> <z> <fluid> <mb>";
     let Some(CommandArgumentValue::BlockPos(pos)) = invocation.argument("pos") else {
         return USAGE.to_owned();
     };
     let pos = *pos;
     match invocation.literals.get(1).map(String::as_str) {
         Some("board") => readout(host, invocation, pos),
+        Some("barrel") => crate::barrel::readout(host, invocation, pos),
         Some("clicks") => {
             let Some(CommandArgumentValue::Integer(clicks)) = invocation.argument("clicks") else {
                 return "usage: /sushigocrafting clicks <x> <y> <z> <n>".to_owned();
             };
             let clicks = u32::try_from(*clicks).unwrap_or(0);
-            if let Some(level) = command_level(&*host, invocation) {
+            if let Some(level) = command_level(&*host, invocation)
+                && is_board(host, level, pos)
+            {
                 write_clicks(host, level, pos, clicks);
             }
             readout(host, invocation, pos)
+        }
+        Some("tank") => {
+            let (
+                Some(CommandArgumentValue::String(fluid)),
+                Some(CommandArgumentValue::Integer(mb)),
+            ) = (invocation.argument("fluid"), invocation.argument("mb"))
+            else {
+                return "usage: /sushigocrafting tank <x> <y> <z> <fluid> <mb>".to_owned();
+            };
+            crate::barrel::set_tank(host, invocation, pos, fluid, *mb);
+            crate::barrel::readout(host, invocation, pos)
         }
         _ => USAGE.to_owned(),
     }
@@ -418,6 +440,12 @@ fn readout(host: &mut dyn ServerHost, invocation: &CommandInvocation, pos: [i32;
     let block = level
         .block(&*host, pos)
         .map_or_else(String::new, |key| key.id(&*host));
+    // The readout reaches `observe`, which reads slot zero and the saved stroke count of whatever
+    // block entity stands there. Require this mod's own block key first: another mod's inventory
+    // is not ours to report, and its slot zero is not a cutting board's input.
+    if !answers_as_a_board(&block) {
+        return format!("{pos:?} is not a mod block entity.");
+    }
     let Some(board) = observe(&*host, level, pos, None) else {
         return format!(
             "{block} at {} {} {}: no block entity",
@@ -436,9 +464,21 @@ fn readout(host: &mut dyn ServerHost, invocation: &CommandInvocation, pos: [i32;
     )
 }
 
+/// Whether a block id names this mod's cutting board, the only block this command reads.
+fn answers_as_a_board(block: &str) -> bool {
+    block == BOARD
+}
+
+/// Whether the block at `pos` is this mod's cutting board.
+fn is_board(host: &mut dyn ServerHost, level: LevelRef, pos: [i32; 3]) -> bool {
+    level
+        .block(&*host, pos)
+        .is_some_and(|key| answers_as_a_board(&key.id(&*host)))
+}
+
 /// The level a command executes in, from the dimension its invocation named (after
 /// `execute in`).
-fn command_level(host: &dyn Host, invocation: &CommandInvocation) -> Option<LevelRef> {
+pub(crate) fn command_level(host: &dyn Host, invocation: &CommandInvocation) -> Option<LevelRef> {
     invocation.dimension.id(host).and_then(|id| host.level(&id))
 }
 
@@ -479,6 +519,23 @@ mod tests {
         assert_eq!(saved_clicks(&nbt), 0);
         nbt.insert(KEY_CLICKS.into(), Tag::Int(-2));
         assert_eq!(saved_clicks(&nbt), 0);
+    }
+
+    #[test]
+    fn the_readout_only_answers_for_the_cutting_board_block() {
+        assert!(answers_as_a_board(BOARD), "our own block is the one board");
+        for other in [
+            "minecraft:furnace",
+            "minecraft:chest",
+            "minecraft:barrel",
+            "sushigocrafting:rice_cooker",
+            "",
+        ] {
+            assert!(
+                !answers_as_a_board(other),
+                "{other} is not a cutting board, so its slot zero is not ours to read"
+            );
+        }
     }
 
     #[test]

@@ -2,17 +2,21 @@
   "icon": "sushigocrafting:cutting_board",
   "items": [
     "sushigocrafting:cutting_board",
+    "sushigocrafting:fermentation_barrel",
     "sushigocrafting:cucumber",
     "sushigocrafting:avocado",
     "sushigocrafting:wasabi_root",
     "sushigocrafting:raw_tuna",
     "sushigocrafting:cleaver_knife",
+    "sushigocrafting:soy_bean",
     "sushigocrafting:avocado_slices",
     "sushigocrafting:cucumber_slices",
     "sushigocrafting:imitation_crab",
     "sushigocrafting:salmon_fillet",
     "sushigocrafting:tuna_fillet",
-    "sushigocrafting:wasabi_paste"
+    "sushigocrafting:wasabi_paste",
+    "sushigocrafting:cheese",
+    "sushigocrafting:soy_sauce"
   ],
   "title": "itemGroup.sushigocrafting"
 }

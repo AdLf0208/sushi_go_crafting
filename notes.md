@@ -1,4 +1,4 @@
-# Sushi Go Crafting — port notes (slice 1: the cutting board)
+# Sushi Go Crafting — port notes (slice 1: the cutting board; slice 2: the fermentation barrel)
 
 Ported from **Sushi Go Crafting 1.21-0.6.7** (`Buuz135/SushiGoCrafting`, **MIT**)
 for Minecraft Java 1.21.1 / NeoForge. Jar
@@ -10,8 +10,10 @@ cloned shallow to `ports/_shared/upstream/sushigocrafting` and deleted once
 [`FINDINGS.md`](FINDINGS.md) was written. The Rust is a clean-room rewrite: no
 Java was copied and no class was decompiled.
 
-Pin **`1d63e0a5a37a7a708eb0b32b49bf0dfeb28ed8a9`** (`game.rs` `64813cf4…`),
-mixins **`5a64af938ec86b00d53d16a408aabc0038fb3e57`** (schema 6).
+Pins: slice 1 was built at **`1d63e0a5a37a7a708eb0b32b49bf0dfeb28ed8a9`**, migrated to the
+SDK pin **`0b14f8acfd97fa2c750e42795249dcc981178ca4`** (0.2.0/0.2.1), and slice 2 is built at the
+campaign pin **`0a875da91dbb0fdcb7ba8c42c11341aa229af51a`** (nightly 2026-11-20, `package_format` 6,
+`content_api` "0.2"); mixins **`e59da9094f0c2fdda6c627fe9eff22dec6a906f0`** throughout.
 
 Local-only until the maintainer approves publishing (`ARCHITECTURE.md` §8).
 **Licence rank 0** (MIT) — the licence was read from the jar, not from a
@@ -496,3 +498,220 @@ the `[[versions]]` record and links the file, and a **maintainer** runs `scripts
 orchestrator's `python3 ports/tools/publish-ready.py sushigocrafting` does the bookkeeping; this job
 owns no submission, and the port stays **local-only** until the maintainer approves publishing
 (`ARCHITECTURE.md` §8).
+
+## Review fixes (2026-11-18, PR #1224)
+
+The reviewer found the public cutting-board readout (`/sushigocrafting board <x> <y> <z>`) accepted
+arbitrary coordinates and reached `observe`, which read slot zero of any loaded mod block entity,
+disclosing that block's item and count without its inventory access policy.
+
+- **Fix.** `readout` requires the block key `sushigocrafting:cutting_board` (`answers_as_a_board`);
+  any other block answers `… is not a mod block entity.` before `observe` runs. The
+  `/sushigocrafting clicks` harness write is gated the same way.
+- **Test.** `the_readout_only_answers_for_the_cutting_board_block` (a furnace, chest, barrel and
+  the mod's own unported rice cooker are refused).
+- **In-game.** A vanilla chest holding three diamonds is read through the board command and the
+  reply is the refusal, with no item id. Evidence:
+  `../_shared/evidence/sushigocrafting-e2e/e2e-launcher.log` (`PASS` + `EXIT:0`) and
+  `e2e-launcher-control.log` (`EXIT:1`); checker green.
+- **Package.** `sushigocrafting.hmod`, **0.2.1**, 61,376 B, sha256
+  `c0f681c76551d96e71cb0f1929e72fc7009303e6ba05b9e59ab5d4183ea2c0e6`; two builds byte-identical,
+  `check` and `fits --build 0b14f8a` exit 0.
+
+
+## Slice 2 (0.2.2, 2026-11-21): the fermentation barrel
+
+### The family, and the gap line it comes from
+
+Gap 1 of this file's own list (before this slice):
+
+> **The other four machines**: `rice_cooker` (4 input slots + fuel + an 8,000 mB water tank + a
+> 100-tick bar), `fermentation_barrel` (1 in, 1 out, a 2,000 mB tank, 100 ticks), `roller` (the
+> weighing/crafting UI) and `cooler_box`.
+
+The **fermentation barrel** is the second of the four and the first machine of this port with a
+**fluid** in it. It fits the tier (`content`/`machines`): a block entity, a two-slot container, a
+fluid-tank capability, a 100-tick bar, a menu and a screen — no entity, no renderer, no dimension.
+It is also the only one of the four whose **own crafting recipe** needs nothing but vanilla items
+(`minecraft:furnace`, `#minecraft:planks`, `#minecraft:wooden_pressure_plates`), so the recipe can
+be crafted the way it declares in a bare 26.3; the rice cooker's needs `#c:ingots/iron` from
+another mod (gap 7, the cleaver's own problem).
+
+Upstream read from the same shallow clone (`Buuz135/SushiGoCrafting`, branch `1.21`, commit
+`c3b296bf…`, deleted again after this section): `tile/machinery/FermentationBarrelTile.java`,
+`recipe/FermentingBarrelRecipe.java`, `block/machinery/FermentationBarrelBlock.java`,
+`SushiContent.Items` (the amount bounds), and the jar's
+`data/sushigocrafting/recipe/fermenting_barrel/{cheese,soy}.json`.
+
+### What it does
+
+| Area | Upstream | This port |
+|---|---|---|
+| the block | `Properties.ofFullCopy(Blocks.OAK_WOOD)` (hardness 2.0, resistance 3.0, wooden), `RotationType.NONE`, `NORMAL` shape (eight boxes) | template `minecraft:barrel` (a container template, so the block opens a menu), the jar's hardness/sound, `occludes: false`, the eight boxes as outline **and** collision |
+| the block entity | `ActiveTile`, one entity per block | a declared block entity type; its Part is attached with `block_entity_part`, which also puts the block half on the block |
+| the slots | `InventoryComponent("input", 30, 48, 1)` + `("output", 130, 48, 1)`; the input cannot be extracted from, the output cannot be inserted into | a two-slot `ModContainer`, `inputs = [0]`, `outputs = [1]`, every face reaching both |
+| the tank | `FluidTankComponent("fluid", 2000, 59, 46)`, `Action.FILL` | `ModFluidTanks` one tank of 2,000 mB, every face reaching it, `inputs = [0]`, `outputs = []`; contents saved under `fluids` |
+| the bar | `ProgressBarComponent(93, 48, 100)`, `canIncrease`/`canReset` = `canStart` | `runtime::barrel_step`: count while a batch can start, reset when it cannot, finish at 100 ticks |
+| `canStart` | a recipe's input matches, its fluid is in the tank with at least its amount, and the output can take one more (`canStack`) | `runtime::barrel_startable` (`Ingredient.EMPTY` for `"input": []` matches only an **empty** slot) |
+| `onFinish` | shrink the input, drain 250 mB, insert/combine the `AmountItem` | `runtime::barrel_finish` + `runtime::combined_amount`, the item through the registered `sushigocrafting:amount` component |
+| the recipes | cheese: `"input": []`, milk 250 → `cheese` (50/250/500); soy: `#c:crops/soybean`, water 250 → `soy_sauce` (10/50/100) | `runtime::BARREL_RECIPES`, unit tested against the two JSON files |
+| the click | `super.onActivated` (Titanium's fluid-container handling), else `openGui` | a bucket in hand fills the tank (`runtime::bucket_click`); anything else falls through to the block, whose own empty-hand click opens the menu |
+| the menu | Titanium's machine panel (2 slots, a tank gauge, the bar) | a menu type `data/sushigocrafting/horizon/menu/fermentation_barrel.json` (2 slots, 2 data slots, slot 1 a result), a `Screen` Part placing them at upstream's 30/130,48 on a 176x166 panel, and the two data slots carrying the bar |
+| the tick | `serverTick` (Titanium's bar) | one `block_entity_tick` |
+
+### Two decisions this slice had to make (and why)
+
+1. **Milk is not a fluid Horizon models.** The engine's item-fluid table is explicit about it —
+   `horizon-client/src/game/native_item_fluids.rs`: *"The bucket items: (empty, full), by the fluid
+   they hold. A bucket is all or nothing, as `BucketItem` is. **Milk, powder snow and fish buckets
+   hold no fluid Horizon models.**"* — and `native_fluid_insert` (the pipes' fill) returns the whole
+   amount for anything but `minecraft:water`/`minecraft:lava`. NeoForge models `minecraft:milk`, so
+   upstream's `FluidUtil.interactWithFluidHandler` fills the tank from a milk bucket; at this pin the
+   engine's own helper can only move water and lava. The port therefore moves the vanilla buckets
+   itself (`runtime::FULL_BUCKETS`: water, lava, milk — a pure, unit-tested `bucket_click`), writes
+   the tank through `merge_data` and swaps one container for the other through
+   `ItemPlace::PlayerHand::exchange` in a transaction, as `FluidUtil` does. **What a pipe can do is
+   narrower:** the engine's insert moves water and lava only, so milk arrives from a hand (or the
+   port's `/sushigocrafting tank` harness command) — a recorded engine gap, not a port choice.
+2. **`Action.FILL` is taken at its word.** A container in hand fills the tank; nothing drains it
+   into a container (the machine's own `drainForced` takes the batch). This is also what makes the
+   click idempotent for the harness: `ctl interact` can be heard twice, and a second click with the
+   now-empty bucket is refused instead of emptying what the first one just filled.
+
+### Content carried and written
+
+See [`CONTENT.md`](CONTENT.md) for the file list. In short: the barrel's block model, texture, item
+model and 26.3 item definition are carried; its blockstate is **written** (the `minecraft:barrel`
+template brings vanilla's `facing`/`open`, so the jar's single `""` variant cannot match — eight
+`facing=…,open=…` variants are written instead, as `mekmm`'s barrel-template machines do); its loot
+table and crafting recipe are re-spelled for 26.3; `c:crops/soybean` is carried; `soy_bean`, `cheese`
+and `soy_sauce` (the last two `AmountItem`s) are declared; the menu type is written.
+
+### Coverage (ruling 2026-11-20) — every family, and what proves it
+
+| Family | Status | Proof |
+|---|---|---|
+| the barrel block: place, read back, break-drop | **tested** | e2e J: `ctl place` from the item, `ctl block` is `sushigocrafting:fermentation_barrel`; the loot table is carried (one item, `survives_explosion`) |
+| its own crafting recipe (7 planks + plate + furnace) | **tested** | e2e I via `tools/craft_barrel.py`: 1 barrel, the grid consumed, and the same ingredients in another pattern → no result |
+| the two-slot container and its menu | **tested** | e2e L/M: `ctl interact` opens a 2-slot menu, `ctl click-slot 301` takes the output, `ctl click-slot 300` puts the bean in; e2e J asserts the container reads empty |
+| the tank (2,000 mB), a bucket fill, no drain | **tested** | e2e K: milk bucket → `1000/2000`, the bucket swapped; an empty bucket leaves it at 1000; e2e O: the setter clamps 2,500 → 2,000 |
+| the 100-tick bar and the batch | **tested** | e2e L: 250 mB + empty slot → one `cheese` with amount 210 (in 50..249), tank 0, bar 0; e2e M: bean + water → `soy_sauce`, bean and 250 mB consumed |
+| the cheese recipe (`"input": []`, milk) | **tested** | e2e L (as above); the empty slot is what makes it run |
+| the soy recipe (`#c:crops/soybean`, water) | **tested** | e2e M; the tag is carried and the bean is the only member |
+| a wrong setup ferments nothing (differential) | **tested** | e2e N: a bean and **no** water, 120 ticks → no output, bar 0 |
+| the amount roll of both outputs | **tested** | `runtime::cut_amount` (unit) + the e2e's range assertion, with `SELFTEST=1` inverting it (`FAIL: the cheese amount is 208, expected 250..249`) |
+| the menu's tank gauge and progress arrow (drawn) | `not ported` | the screen places the slots and syncs the two data slots; nothing draws the gauge/arrow (no `screen_draw` in this slice — the client half, gap 8 below) |
+| fluid in through a **pipe** | `blocked(engine: native_fluid_insert moves water and lava only)` | the tank's `inputs`/`faces` declaration is there for it; a pipe's milk is refused upstream of the port |
+| the tank's fluid leaving through the capability | `not ported` (deliberate) | `Action.FILL`: nothing drains a player's tank; the machine's own batch drain is internal |
+
+### The ladder (all inside `build-slot.sh` leases, `BUILD_LOCAL=1`, `CARGO_INCREMENTAL=0`)
+
+| Step | Command | Result | Evidence |
+|---|---|---|---|
+| red (tests first, bodies `todo!()`) | `cargo test --offline` | **22 passed, 8 failed** — the eight new barrel tests, `not yet implemented` | `../_shared/evidence/sushigocrafting/sdk-test-red-barrel.log` |
+| green | `cargo test --offline` | **30 passed**, 0 failed (19 `runtime::` — 10 board + 9 barrel —, 4 `board::`, 6 `barrel::`, 1 `tests::`) | `sdk-test.log` |
+| lints | `cargo clippy --all-targets -- -D warnings` | exit 0, **0 warnings** | `sdk-clippy.log` |
+| format | `cargo fmt --check` | exit 0 | `sdk-fmt.log` |
+| package ×2 | `rm -f Cargo.lock && cargo horizon-mod build`, twice | **89,472 B**, sha256 `f187e3cf…64bb3` both times, `cmp` identical | `sdk-build.log`, `sdk-build-second.log` |
+| registry check | `cargo horizon-mod check sushigocrafting.hmod` | `sushigocrafting 0.2.2 (native-mod, format native-1/0a875da…/e59da90…, for 26.3)`, **89472 bytes**, exit 0 | `sdk-check.log` |
+| fits the pin | `cargo horizon-mod fits sushigocrafting.hmod --build 0a875da` | `0a875da  made for` | `sdk-fits.log` |
+| fits another build | `… --build 0b14f8a` | `0b14f8a  fits` | `sdk-fits-other.log` |
+| gate | `python3 ports/tools/verify-sdk-package.py sushigocrafting` | **1/1** | command output |
+| in-game | `launcher-game.sh build sushigocrafting`, then the e2e | `PASS` + `EXIT:0` (every leg A–O) | `../_shared/evidence/sushigocrafting-e2e/e2e-launcher.log` |
+| control | the same script on `CONTROL_GAME` (no package) | `FAIL: the board item did not register` + `EXIT:1` | `e2e-launcher-control.log` |
+| selftest | `SELFTEST=1` | `FAIL: the cheese amount is 208, expected 250..249` + `EXIT:1` | `e2e-selftest.log` |
+| log gate | `check-e2e-logs.py sushigocrafting-e2e --strict` | `logs=3 ok=3 missing-exit=0 bad-exit=0`, exit 0 | command output |
+
+The package's 95 entries are the two manifests, `LICENSE`, `LICENSE-NOTICE.md`, `README.md`,
+`src/{lib,board,barrel,runtime}.rs`, `assets/` (53), `data/` (32) and `uses.json`; **no
+`Cargo.lock`**. `uses.json` records **428 surface entries**: 38 hook entries over 14 hooks
+(`block_entity`, `block_entity_tick`, `block_entity_ticks`, `blocks`, `command`, `component_types`,
+`ingredient`, `items`, `register_commands`, `run_mod_command`, `screen`, `state_for_placement`,
+`use_item_on`, `use_without_item`), 6 Part kinds, 44 methods, 99 handles, 27 traits, 211 types, the
+two macros and the `registries` capability.
+
+### Traps this slice hit (new to this port)
+
+1. **`ctl screen` / `ctl ui` time out on a `--headless` game.** They need the client's renderer;
+   the menu legs therefore run on an `--offscreen` launch (botanypots' e2e is offscreen for the
+   same reason). The board's legs were re-run on it unchanged apart from the sneak-click timing
+   below.
+2. **A sneak click needs the key state to settle.** Under `--offscreen` the first attempt failed
+   (`the input after the hand-back is …cucumber`): `ctl key shift down` followed immediately by
+   `ctl interact` was heard by the server before the client had the key down. Four ticks either
+   side of the click fix it.
+3. **A `minecraft:barrel` template inherits `facing` and `open`.** The state reads
+   `sushigocrafting:fermentation_barrel[facing=north,open=false]`, so the jar's `""` blockstate
+   variant matches nothing; the port writes the eight horizontal variants.
+4. **`block_part` + `block_entity_part` is refused.** A Part that implements `BlockEntityPart` must
+   be attached with `block_entity_part` only: it also puts the block half on every block of the
+   type, which is what makes `use_item_on` reach the barrel. The first version attached it with
+   `block_part`, so the bucket click and the tick never ran — the readout was the only thing that
+   worked. `the_engine_accepts_every_part_of_this_package` now runs `register` through the SDK's
+   own installer, so the engine's verdict is a unit test.
+5. **Milk buckets do not stack.** `ctl … item replace … with minecraft:milk_bucket 2` is refused
+   (`can only stack up to 1`) and leaves an empty hand, so the click opened the menu instead of
+   filling the tank. One bucket per hand.
+6. **`<fluid:word>` cannot carry `minecraft:water`.** `word` stops at `:`; the command argument is
+   `<fluid:id>`.
+7. **A local type named `Item` or `Recipe` makes `fits --build <other>` fail.** The scanner matches
+   struct/tuple literals by name against the target build's surface: `Input::Item(…)` and
+   `Recipe { … }` were reported as *"the type `Item` can no longer be built with a literal"* on a
+   cross-build run even though our types are our own. Renaming them (`Input::Id`,
+   `BoardRecipe`) removed the false positive — and made the pure module say what it means.
+8. **`ctl interact` must be in reach** (5 blocks) and the player must be on the floor: a helper that
+   teleports first and then clicks needs the arena under both.
+9. **`ctl container`'s slot numbers are the array index**, not a `slot` field (that reads `null` in
+   the reply); `to_entries` gives the index.
+
+### Gaps after slice 2
+
+1. **The other three machines**: `rice_cooker` (4 input slots + fuel + an 8,000 mB water tank + a
+   100-tick bar; it produces `cooked_rice`, and its own recipe needs `#c:ingots/iron`, gap 7),
+   `roller` (the weighing/crafting UI — the deepest of the four) and `cooler_box` (20 slots, a
+   `combine_amount` tick; 20 is not a vanilla menu grid, so it needs a written menu type).
+2. **Every crop** (`rice`, `cucumber`, `soy`, `sesame`, `wasabi`) and the **avocado tree**. The
+   "content crops do not random-tick" gap was **withdrawn on 2026-11-12** (`ARCHITECTURE.md` §3: a
+   content crop on the `wheat` template does grow, `Class::Crop → crop_random_tick`); this port's
+   earlier note cited the withdrawn version. A crop slice should re-test it rather than inherit
+   the claim. Until then the barrel's `soy_bean` and the board's ingredients come from `ctl give`.
+3. **The sources of the ingredients**: `ShrimpEntity`, `TunaEntity`, the `avocado_leaves_ripe`
+   drop, the seed loot modifiers (`grass_seeds`, `item_amount`) and the worldgen/biome modifiers.
+4. **The container filter for the board.** `container_accepts` is still not a stamped hook in this
+   pin's surface (a grep of `surface.json`'s 749 hooks finds none), so a hopper can put any item in
+   the board's slot; the barrel has the same hole for its input slot (the machine refuses to run,
+   the slot keeps the item).
+5. **Steady Hands.** No stamped way to read a player's effects for the amount bonus; the three mob
+   effects (`acquired_taste`, `small_bites`, `steady_hands`) are still unregistered.
+6. **The sushi foods and the `FoodItem`/`Roller` crafting chain** that consume the AmountItems; the
+   `combine_amount` recipe; `nori_sheets`, `tobiko`, `shrimp`, `cooked_rice` and the fish buckets.
+   Slice 2 added two of the AmountItems (`cheese`, `soy_sauce`) and the `soy_bean`.
+7. **The cleaver-knife and rice-cooker recipes need `#c:ingots/iron`** from another mod: the cleaver
+   is carried (recorded, not dropped); the rice cooker will be the same when it is ported.
+8. **The client half**: the board's `CuttingBoardRenderer`, and the barrel's tank gauge and progress
+   arrow (the screen places the slots and syncs the data slots; nothing draws over them).
+9. **The Patchouli guide book** and the 65 `patchouli_books` files.
+10. **`combine_amount`, KubeJS scripts, CraftTweaker/JEI/Diet compat.**
+
+### Changelog (0.2.2) — supersedes 0.2.1
+
+> **0.2.2 — the fermentation barrel.** The second of the mod's four machines: a block entity with
+> an input and an output slot, a 2,000 mB tank, a 100-tick bar and the GUI Titanium opens, plus the
+> jar's two recipes — milk 250 → `cheese` (50..249) and a `#c:crops/soybean` in 250 mB of water →
+> `soy_sauce` (10..49). `src/runtime.rs` gained the two recipe rows, the start predicate, the bar,
+> the batch, the amount combine and the bucket click, all unit tested; `src/barrel.rs` is the glue
+> (declarations, tick, menu + screen, bucket click, readouts) and `src/lib.rs` attaches one Part to
+> the block entity type. The content adds the block (on the `minecraft:barrel` template, so it opens
+> a menu), its model, texture, loot table and **craftable** recipe (7 planks + a wooden pressure
+> plate + a furnace — all vanilla, so it is proven in a real table), the menu type, the
+> `c:crops/soybean` tag and three items (`soy_bean`, `cheese`, `soy_sauce`). The tank takes a bucket
+> in hand — water, lava **or milk**: `minecraft:milk` is not a fluid Horizon models, so the port
+> moves that bucket itself while the engine's `FluidUtil` path handles the rest, and `Action.FILL`
+> means a bucket never drains the tank. Built against SDK `0a875da` / mixins `e59da90` for 26.3;
+> package **89,472 B**, sha256 `f187e3cf604de5b90586b983cc597728f08b3847cce276d339794d09e8264bb3`,
+> 95 entries, `check` and both `fits` runs (the pin and `0b14f8a`) exit 0. In game: `PASS` +
+> `EXIT:0` (the barrel is crafted, filled by a milk bucket, one batch of cheese and one of soy sauce
+> with their amounts asserted, and a barrel with no water ferments nothing), control `EXIT:1`,
+> `SELFTEST=1` `EXIT:1`.
+
+Skills: superpowers/using-superpowers, brainstorming, writing-plans, test-driven-development, systematic-debugging, verification-before-completion; BeautifulRust/rust-best-practices, rust-port, rust-review

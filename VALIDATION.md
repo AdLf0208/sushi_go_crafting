@@ -182,3 +182,48 @@ A native `.hmod` is loaded by a game the **launcher** built with it
 must be unknown), and keeps the fail-capable `SELFTEST=1`. **No 0.2.0 in-game leg is claimed.** The
 0.1.0 runs (`e2e-default.log`, `e2e-embedded.log`, `e2e-selftest.log`) stand as the behaviour's
 evidence for a `runtime.rs` that did not change; what changed is the transport of the same calls.
+
+## 9. Slice 2 — the fermentation barrel (0.2.2), pin `0a875da` (2026-11-21)
+
+Everything below ran in a `build-slot.sh` lease with `BUILD_LOCAL=1` and `CARGO_INCREMENTAL=0`
+(the runner forwards `check`/`build` to the remote box otherwise, whose own `cd` then eats the
+wrapped `cd ports/sushigocrafting`).
+
+| Step | Command | Result | Evidence |
+|---|---|---|---|
+| red (tests first, bodies `todo!()`) | `cargo test --offline` | **22 passed, 8 failed** — the eight barrel tests, `not yet implemented` | `../_shared/evidence/sushigocrafting/sdk-test-red-barrel.log` |
+| tests | `cargo test --offline` | **30 passed**, 0 failed | `sdk-test.log` |
+| lints | `cargo clippy --all-targets -- -D warnings` | exit 0, 0 warnings | `sdk-clippy.log` |
+| format | `cargo fmt --check` | exit 0 | `sdk-fmt.log` |
+| package, twice | `rm -f Cargo.lock && cargo horizon-mod build` (twice) | **89,472 B**, sha256 `f187e3cf604de5b90586b983cc597728f08b3847cce276d339794d09e8264bb3`, `cmp` identical, 95 entries, no `Cargo.lock` | `sdk-build.log`, `sdk-build-second.log` |
+| registry check | `cargo horizon-mod check sushigocrafting.hmod` | `sushigocrafting 0.2.2 (native-mod, format native-1/0a875da…/e59da90…, for 26.3)`, **89472 bytes**, exit 0 | `sdk-check.log` |
+| fits the pin | `cargo horizon-mod fits sushigocrafting.hmod --build 0a875da` | `0a875da  made for` | `sdk-fits.log` |
+| fits another build | `… --build 0b14f8a` | `0b14f8a  fits` | `sdk-fits-other.log` |
+| package gate | `python3 ports/tools/verify-sdk-package.py sushigocrafting` | **1/1** | command output |
+| skills gate | `python3 ports/tools/check-skills.py --notes ports/sushigocrafting --strict` | `SKILLS GATE: PASS` | command output |
+
+### The in-game leg (offscreen, launcher-built game)
+
+The package is a native `.hmod`, so the game is the launcher's build of it
+(`ports/tools/launcher-game.sh build sushigocrafting` → `GAME`/`CTL`/`CONTROL_GAME`/`RES`
+exports). The leg is **`--offscreen`**, not `--headless`: `ctl screen`/`ctl ui` need the client's
+renderer and time out without one, and the menu legs open the barrel's GUI.
+
+| Leg | What it asserts | Log |
+|---|---|---|
+| main | `PASS` + `EXIT:0` — A–H the board (unchanged), I the barrel's recipe crafted in a real table (1 barrel, grid consumed, another pattern → nothing), J place + empty readout, K a milk bucket fills to 1000/2000 and an empty bucket gives none back, L one batch of cheese (amount 210, inside 50..249), tank 250→0, bar back to 0, taken out through the menu's 2 slots, M a soy bean through the menu's input + 250 mB of water → `soy_sauce`, bean and water consumed, N a bean with no water and 120 ticks → nothing, O the tank setter clamps 2,500 → 2,000 | `../_shared/evidence/sushigocrafting-e2e/e2e-launcher.log` |
+| control | the same script on `CONTROL_GAME` (the Nightly without the package): `FAIL: the board item did not register` + `EXIT:1` | `…/e2e-launcher-control.log` |
+| selftest | `SELFTEST=1` (the cheese amount range inverted to 250..249): `FAIL: the cheese amount is 208, expected 250..249` + `EXIT:1` | `…/e2e-selftest.log` |
+
+`python3 ports/tools/check-e2e-logs.py sushigocrafting-e2e --strict`:
+
+```
+ok       sushigocrafting-e2e    e2e-launcher-control.log   FAIL + EXIT:1
+ok       sushigocrafting-e2e    e2e-launcher.log           PASS + EXIT:0
+ok       sushigocrafting-e2e    e2e-selftest.log           FAIL + EXIT:1
+
+logs=3  ok=3  missing-exit=0  bad-exit=0
+```
+
+`SELFTEST=board` inverts the board's slice amount instead (kept from slice 1); the recorded
+selftest run is this slice's family.
